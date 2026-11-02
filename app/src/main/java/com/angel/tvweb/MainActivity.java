@@ -7,18 +7,22 @@ import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
 import android.os.SystemClock;
+import android.view.Gravity;
 import android.view.InputDevice;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.webkit.CookieManager;
+import android.webkit.JsPromptResult;
+import android.webkit.JsResult;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
@@ -26,6 +30,7 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.ByteArrayInputStream;
@@ -37,10 +42,10 @@ import java.util.Set;
 
 /**
  * HentaiLA para Google TV.
- *  - Cursor siempre visible. En modo ELEMENTOS (por defecto) las flechas saltan entre
- *    enlaces/botones y el cursor se coloca sobre cada uno; OK lo abre.
- *  - En modo LIBRE las flechas mueven el cursor por toda la pantalla.
- *  - Cambiar de modo: mantener OK pulsado (o tecla MENÚ).
+ *  - Cursor siempre visible. Por defecto es LIBRE: las flechas lo mueven por toda la pantalla.
+ *  - En modo ELEMENTOS las flechas saltan entre enlaces/botones y el cursor se coloca sobre cada uno.
+ *  - Cambiar de modo: mantener OK pulsado, o MENÚ / Play-Pausa / Guía / Info / teclas de color.
+ *  - Una etiqueta abajo a la izquierda indica el modo actual.
  *  - CH+ / CH- (o Re Pág / Av Pág): desplazar la página.
  *  - Bloqueo de publicidad: lista de dominios, redirecciones automáticas y ventanas emergentes.
  */
@@ -62,17 +67,19 @@ public class MainActivity extends Activity {
     private FrameLayout root;
     private WebView web;
     private CursorView cursor;
+    private TextView modeLabel;
     private int cursorSize;
     private View customView;
     private WebChromeClient.CustomViewCallback customCallback;
     private float cx, cy;
-    private boolean pointerMode = false;
+    private boolean pointerMode = true;
     private long okDownTime;
     private boolean okLongHandled;
     private String navJs = "";
     private String siteHost = "";
     private final Set<String> blocked = new HashSet<>();
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private final Runnable shortenLabel = () -> showModeLabel(false);
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -90,6 +97,20 @@ public class MainActivity extends Activity {
 
         web = new WebView(this);
         root.addView(web, new FrameLayout.LayoutParams(MATCH, MATCH));
+
+        modeLabel = new TextView(this);
+        modeLabel.setTextColor(Color.WHITE);
+        modeLabel.setTextSize(14);
+        modeLabel.setPadding(dp(14), dp(7), dp(14), dp(7));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Color.argb(190, 60, 20, 70));
+        bg.setCornerRadius(dp(18));
+        modeLabel.setBackground(bg);
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM | Gravity.START);
+        lp.setMargins(dp(24), 0, 0, dp(24));
+        root.addView(modeLabel, lp);
 
         cursor = new CursorView(this);
         cursorSize = dp(40);
@@ -160,6 +181,25 @@ public class MainActivity extends Activity {
             }
 
             @Override
+            public boolean onJsAlert(WebView v, String url, String message, JsResult result) {
+                result.cancel();
+                Toast.makeText(MainActivity.this, "Aviso bloqueado", Toast.LENGTH_SHORT).show();
+                return true;
+            }
+
+            @Override
+            public boolean onJsConfirm(WebView v, String url, String message, JsResult result) {
+                result.cancel();
+                return true;
+            }
+
+            @Override
+            public boolean onJsPrompt(WebView v, String url, String message, String def, JsPromptResult result) {
+                result.cancel();
+                return true;
+            }
+
+            @Override
             public void onHideCustomView() { hideCustom(); }
         });
 
@@ -167,9 +207,7 @@ public class MainActivity extends Activity {
             cx = root.getWidth() / 2f;
             cy = root.getHeight() / 2f;
             updateMode();
-            Toast.makeText(this,
-                    "Flechas: saltar entre elementos · OK: abrir · Mantén OK: cursor libre · CH+/CH-: desplazar",
-                    Toast.LENGTH_LONG).show();
+            showModeLabel(true);
         });
 
         web.loadUrl(HOME_URL);
@@ -244,9 +282,14 @@ public class MainActivity extends Activity {
             float fx = cx / Math.max(1, web.getWidth()), fy = cy / Math.max(1, web.getHeight());
             web.evaluateJavascript("window.__nav&&window.__nav('at:" + fx + ":" + fy + "')", this::applyNavResult);
         }
-        Toast.makeText(this, pointerMode
-                ? "Cursor libre · mantén OK para volver a elementos"
-                : "Modo elementos · mantén OK para cursor libre", Toast.LENGTH_SHORT).show();
+        showModeLabel(true);
+    }
+
+    private void showModeLabel(boolean hint) {
+        String base = pointerActive() ? "● CURSOR LIBRE" : "▣ ELEMENTOS";
+        modeLabel.setText(hint ? base + "  ·  mantén OK para cambiar" : base);
+        handler.removeCallbacks(shortenLabel);
+        if (hint) handler.postDelayed(shortenLabel, 6000);
     }
 
     // ---------- Modo elementos ----------
@@ -289,8 +332,7 @@ public class MainActivity extends Activity {
                         cx = x; cy = y;
                         pointerMode = true;
                         updateMode();
-                        Toast.makeText(this, "Cursor libre · mantén OK para volver a elementos",
-                                Toast.LENGTH_SHORT).show();
+                        showModeLabel(true);
                     }
                 } catch (NumberFormatException ignored) { }
             } else if (!"clicked".equals(s)) {
@@ -362,6 +404,18 @@ public class MainActivity extends Activity {
         boolean down = e.getAction() == KeyEvent.ACTION_DOWN;
         switch (k) {
             case KeyEvent.KEYCODE_MENU:
+            case KeyEvent.KEYCODE_GUIDE:
+            case KeyEvent.KEYCODE_INFO:
+            case KeyEvent.KEYCODE_BOOKMARK:
+            case KeyEvent.KEYCODE_PROG_RED:
+            case KeyEvent.KEYCODE_PROG_GREEN:
+            case KeyEvent.KEYCODE_PROG_YELLOW:
+            case KeyEvent.KEYCODE_PROG_BLUE:
+                if (down && e.getRepeatCount() == 0) toggleMode();
+                return true;
+
+            case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
+                if (customView != null) return super.dispatchKeyEvent(e);   // en video, pausa normal
                 if (down && e.getRepeatCount() == 0) toggleMode();
                 return true;
 
