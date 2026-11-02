@@ -28,6 +28,13 @@ jobs:
           mkdir -p ~/.android
           cp debug.keystore ~/.android/debug.keystore
 
+      - name: Descargar lista de bloqueo de anuncios
+        run: |
+          mkdir -p app/src/main/assets
+          curl -fsSL "https://pgl.yoyo.org/adservers/serverlist.php?hostformat=nohtml&showintro=0&mimetype=plaintext" \
+            -o app/src/main/assets/blocklist.txt || echo "# sin lista descargada" > app/src/main/assets/blocklist.txt
+          wc -l app/src/main/assets/blocklist.txt
+
       - name: Compilar APK
         run: gradle assembleDebug --no-daemon --stacktrace
 

@@ -8,7 +8,7 @@
     <uses-feature android:name="android.software.leanback" android:required="false" />
 
     <application
-        android:label="Web TV 2"
+        android:label="HentaiLA"
         android:icon="@drawable/ic_launcher"
         android:banner="@drawable/banner"
         android:hardwareAccelerated="true"
