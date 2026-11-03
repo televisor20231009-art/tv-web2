@@ -3,7 +3,6 @@ package com.hentaila.tv;
 import android.app.Activity;
 import android.graphics.Bitmap;
 import android.graphics.Color;
-import android.net.Uri;
 import android.os.Bundle;
 import android.os.Message;
 import android.view.KeyEvent;
@@ -38,9 +37,23 @@ public class MainActivity extends Activity {
             "Mozilla/5.0 (Linux; Android 12; Android TV) AppleWebKit/537.36 "
                     + "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
-    // CSS + JS que limpia el sitio: solo contenido, video y navegación básica
+    // CSS + JS que limpia el sitio: diseño de escritorio, sin barra inferior,
+    // sin enlaces externos, con resaltado de foco para el control remoto
     private static final String CLEAN_JS =
             "(function(){"
+          // Fuerza el diseño de escritorio (ancho virtual 1280px)
+          + "function vp(){var m=document.querySelector('meta[name=viewport]');"
+          + " if(!m){m=document.createElement('meta');m.setAttribute('name','viewport');"
+          + "  (document.head||document.documentElement).appendChild(m);}"
+          + " if(m.getAttribute('content')!=='width=1280'){m.setAttribute('content','width=1280');}}"
+          // Oculta cualquier barra fija inferior que contenga el enlace Catálogo
+          + "function bar(){document.querySelectorAll('a').forEach(function(a){"
+          + " if(!/Cat/.test(a.textContent))return;"
+          + " var p=a;"
+          + " while(p&&p!==document.body){var c=getComputedStyle(p);"
+          + "  if(c.position==='fixed'&&parseInt(c.bottom)<=2){p.style.display='none';break;}"
+          + "  p=p.parentElement;}"
+          + "});}"
           + "if(!window.__tvInit){window.__tvInit=true;"
           + " var s=document.createElement('style');"
           + " s.textContent='*:focus{outline:4px solid #ff2d75!important;outline-offset:2px!important;border-radius:6px}"
@@ -51,6 +64,7 @@ public class MainActivity extends Activity {
           + " mo.observe(document.documentElement,{childList:true,subtree:true});"
           + "}"
           + "function clean(){"
+          + " vp();bar();"
           + " document.querySelectorAll('a[href]').forEach(function(a){"
           + "  var h=a.getAttribute('href')||'';"
           + "  if(/^https?:\\/\\//i.test(h)){"
@@ -95,7 +109,7 @@ public class MainActivity extends Activity {
         st.setSupportMultipleWindows(true);
         st.setJavaScriptCanOpenWindowsAutomatically(false);
         st.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
-        st.setTextZoom(115);
+        st.setTextZoom(100);
 
         CookieManager cm = CookieManager.getInstance();
         cm.setAcceptCookie(true);
@@ -132,6 +146,12 @@ public class MainActivity extends Activity {
             @Override
             public void onPageStarted(WebView v, String url, Bitmap favicon) {
                 super.onPageStarted(v, url, favicon);
+            }
+
+            @Override
+            public void onPageCommitVisible(WebView v, String url) {
+                super.onPageCommitVisible(v, url);
+                v.evaluateJavascript(CLEAN_JS, null);
             }
 
             @Override
