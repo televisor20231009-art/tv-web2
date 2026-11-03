@@ -14,24 +14,9 @@ android {
         versionName "1.0"
     }
 
-    // Firma con tu debug.keystore (si no coincide la contraseña, borra este bloque
-    // y la línea signingConfig de buildTypes: usará la firma debug por defecto)
-    signingConfigs {
-        debug {
-            storeFile rootProject.file('debug.keystore')
-            storePassword 'android'
-            keyAlias 'androiddebugkey'
-            keyPassword 'android'
-        }
-    }
-
     buildTypes {
-        debug {
-            signingConfig signingConfigs.debug
-        }
         release {
             minifyEnabled false
-            signingConfig signingConfigs.debug
         }
     }
 
