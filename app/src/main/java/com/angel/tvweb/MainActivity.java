@@ -7,14 +7,12 @@ import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
-import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
 import android.os.SystemClock;
-import android.view.Gravity;
 import android.view.InputDevice;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
@@ -30,7 +28,6 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
-import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.ByteArrayInputStream;
@@ -42,12 +39,13 @@ import java.util.Set;
 
 /**
  * HentaiLA para Google TV.
- *  - Cursor siempre visible. Por defecto es LIBRE: las flechas lo mueven por toda la pantalla.
- *  - En modo ELEMENTOS las flechas saltan entre enlaces/botones y el cursor se coloca sobre cada uno.
- *  - Cambiar de modo: mantener OK pulsado, o MENÚ / Play-Pausa / Guía / Info / teclas de color.
- *  - Una etiqueta abajo a la izquierda indica el modo actual.
- *  - CH+ / CH- (o Re Pág / Av Pág): desplazar la página.
- *  - Bloqueo de publicidad: lista de dominios, redirecciones automáticas y ventanas emergentes.
+ *  - Cursor libre por defecto: las flechas lo mueven. Siempre queda dentro de la zona segura de la
+ *    pantalla; al llegar a la franja superior/inferior, la flecha desplaza la página en lugar de salirse.
+ *  - Modo elementos: las flechas saltan entre enlaces/botones. Cambiar de modo: mantener OK pulsado,
+ *    o MENÚ / Play-Pausa / Guía / Info / teclas de color.
+ *  - CH+ / CH- (o Re Pág / Av Pág): desplazar una pantalla.
+ *  - La página se fuerza a un ancho de 1280 px para verse como en un televisor (ver nav.js).
+ *  - Bloqueo de publicidad: dominios, redirecciones automáticas, ventanas emergentes y diálogos JS.
  */
 public class MainActivity extends Activity {
 
@@ -63,23 +61,23 @@ public class MainActivity extends Activity {
 
     private static final int MATCH = FrameLayout.LayoutParams.MATCH_PARENT;
     private static final long LONG_PRESS_MS = 450;
+    private static final long SCROLL_GAP_MS = 140;
 
     private FrameLayout root;
     private WebView web;
     private CursorView cursor;
-    private TextView modeLabel;
     private int cursorSize;
+    private int safe;                       // margen de seguridad (overscan) en px
     private View customView;
     private WebChromeClient.CustomViewCallback customCallback;
     private float cx, cy;
     private boolean pointerMode = true;
-    private long okDownTime;
+    private long okDownTime, lastScroll;
     private boolean okLongHandled;
     private String navJs = "";
     private String siteHost = "";
     private final Set<String> blocked = new HashSet<>();
     private final Handler handler = new Handler(Looper.getMainLooper());
-    private final Runnable shortenLabel = () -> showModeLabel(false);
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -96,24 +94,14 @@ public class MainActivity extends Activity {
         root.setBackgroundColor(Color.BLACK);
 
         web = new WebView(this);
+        web.setVerticalScrollBarEnabled(false);
+        web.setHorizontalScrollBarEnabled(false);
+        web.setOverScrollMode(View.OVER_SCROLL_NEVER);
         root.addView(web, new FrameLayout.LayoutParams(MATCH, MATCH));
-
-        modeLabel = new TextView(this);
-        modeLabel.setTextColor(Color.WHITE);
-        modeLabel.setTextSize(14);
-        modeLabel.setPadding(dp(14), dp(7), dp(14), dp(7));
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(Color.argb(190, 60, 20, 70));
-        bg.setCornerRadius(dp(18));
-        modeLabel.setBackground(bg);
-        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.BOTTOM | Gravity.START);
-        lp.setMargins(dp(24), 0, 0, dp(24));
-        root.addView(modeLabel, lp);
 
         cursor = new CursorView(this);
         cursorSize = dp(40);
+        safe = dp(28);
         root.addView(cursor, new FrameLayout.LayoutParams(cursorSize, cursorSize));
         setContentView(root);
 
@@ -171,19 +159,8 @@ public class MainActivity extends Activity {
             }
 
             @Override
-            public void onShowCustomView(View view, CustomViewCallback cb) {
-                if (customView != null) { cb.onCustomViewHidden(); return; }
-                customView = view;
-                customCallback = cb;
-                root.addView(view, 0, new FrameLayout.LayoutParams(MATCH, MATCH));
-                web.setVisibility(View.INVISIBLE);
-                updateMode();
-            }
-
-            @Override
             public boolean onJsAlert(WebView v, String url, String message, JsResult result) {
                 result.cancel();
-                Toast.makeText(MainActivity.this, "Aviso bloqueado", Toast.LENGTH_SHORT).show();
                 return true;
             }
 
@@ -200,6 +177,16 @@ public class MainActivity extends Activity {
             }
 
             @Override
+            public void onShowCustomView(View view, CustomViewCallback cb) {
+                if (customView != null) { cb.onCustomViewHidden(); return; }
+                customView = view;
+                customCallback = cb;
+                root.addView(view, 0, new FrameLayout.LayoutParams(MATCH, MATCH));
+                web.setVisibility(View.INVISIBLE);
+                updateMode();
+            }
+
+            @Override
             public void onHideCustomView() { hideCustom(); }
         });
 
@@ -207,7 +194,9 @@ public class MainActivity extends Activity {
             cx = root.getWidth() / 2f;
             cy = root.getHeight() / 2f;
             updateMode();
-            showModeLabel(true);
+            Toast.makeText(this,
+                    "Flechas: mover el cursor · OK: abrir · Mantén OK: saltar entre elementos · CH+/CH-: desplazar",
+                    Toast.LENGTH_LONG).show();
         });
 
         web.loadUrl(HOME_URL);
@@ -271,6 +260,7 @@ public class MainActivity extends Activity {
 
     private void updateMode() {
         cursor.setFree(pointerActive());
+        clampCursor();
         placeCursor();
     }
 
@@ -282,14 +272,7 @@ public class MainActivity extends Activity {
             float fx = cx / Math.max(1, web.getWidth()), fy = cy / Math.max(1, web.getHeight());
             web.evaluateJavascript("window.__nav&&window.__nav('at:" + fx + ":" + fy + "')", this::applyNavResult);
         }
-        showModeLabel(true);
-    }
-
-    private void showModeLabel(boolean hint) {
-        String base = pointerActive() ? "● CURSOR LIBRE" : "▣ ELEMENTOS";
-        modeLabel.setText(hint ? base + "  ·  mantén OK para cambiar" : base);
-        handler.removeCallbacks(shortenLabel);
-        if (hint) handler.postDelayed(shortenLabel, 6000);
+        Toast.makeText(this, pointerMode ? "Cursor libre" : "Modo elementos", Toast.LENGTH_SHORT).show();
     }
 
     // ---------- Modo elementos ----------
@@ -312,6 +295,7 @@ public class MainActivity extends Activity {
             try {
                 cx = Float.parseFloat(p[1]) * web.getWidth();
                 cy = Float.parseFloat(p[2]) * web.getHeight();
+                clampCursor();
                 placeCursor();
             } catch (NumberFormatException ignored) { }
         }
@@ -332,7 +316,6 @@ public class MainActivity extends Activity {
                         cx = x; cy = y;
                         pointerMode = true;
                         updateMode();
-                        showModeLabel(true);
                     }
                 } catch (NumberFormatException ignored) { }
             } else if (!"clicked".equals(s)) {
@@ -342,37 +325,50 @@ public class MainActivity extends Activity {
     }
 
     // ---------- Cursor libre ----------
+    private void clampCursor() {
+        int w = root.getWidth(), h = root.getHeight();
+        if (w <= 0 || h <= 0) return;
+        cx = Math.max(safe, Math.min(w - safe, cx));
+        cy = Math.max(safe, Math.min(h - safe, cy));
+    }
+
     private void placeCursor() {
         cursor.setX(cx - cursorSize / 2f);
         cursor.setY(cy - cursorSize / 2f);
     }
 
     private void move(int key, int repeat) {
-        float step = dp(10) + Math.min(repeat, 25) * dp(1) * 1.2f;
+        float step = dp(12) + Math.min(repeat, 25) * dp(1) * 1.2f;
         int w = root.getWidth(), h = root.getHeight();
+        float minX = safe, maxX = w - safe, minY = safe, maxY = h - safe;
+        float band = h * 0.12f;      // franja en la que la flecha desplaza la página
         switch (key) {
             case KeyEvent.KEYCODE_DPAD_UP:
-                if (cy <= 1) scrollPage(-1); else cy = Math.max(0, cy - step);
+                if (cy <= minY + band && (web.canScrollVertically(-1) || cy <= minY + 1)) scrollFrac(-0.35f);
+                else cy = Math.max(minY, cy - step);
                 break;
             case KeyEvent.KEYCODE_DPAD_DOWN:
-                if (cy >= h - 1) scrollPage(1); else cy = Math.min(h - 1, cy + step);
+                if (cy >= maxY - band && (web.canScrollVertically(1) || cy >= maxY - 1)) scrollFrac(0.35f);
+                else cy = Math.min(maxY, cy + step);
                 break;
             case KeyEvent.KEYCODE_DPAD_LEFT:
-                cx = Math.max(0, cx - step);
+                cx = Math.max(minX, cx - step);
                 break;
             case KeyEvent.KEYCODE_DPAD_RIGHT:
-                cx = Math.min(w - 1, cx + step);
+                cx = Math.min(maxX, cx + step);
                 break;
         }
         placeCursor();
     }
 
-    private void scrollPage(int dir) {
-        if (customView == null) web.scrollBy(0, dir * dp(140));
-    }
-
-    private void scrollScreen(int dir) {
-        if (customView == null) web.scrollBy(0, Math.round(dir * web.getHeight() * 0.8f));
+    // Desplazamiento suave (fracción de pantalla) con límite de frecuencia
+    private void scrollFrac(float frac) {
+        if (customView != null) return;
+        long now = SystemClock.uptimeMillis();
+        if (now - lastScroll < SCROLL_GAP_MS) return;
+        lastScroll = now;
+        float fx = cx / Math.max(1, web.getWidth()), fy = cy / Math.max(1, web.getHeight());
+        web.evaluateJavascript("window.__scroll&&window.__scroll(" + frac + "," + fx + "," + fy + ")", null);
     }
 
     // Toque real (down + up) en coordenadas de pantalla de la app
@@ -421,11 +417,11 @@ public class MainActivity extends Activity {
 
             case KeyEvent.KEYCODE_CHANNEL_UP:
             case KeyEvent.KEYCODE_PAGE_UP:
-                if (down) scrollScreen(-1);
+                if (down) scrollFrac(-0.8f);
                 return true;
             case KeyEvent.KEYCODE_CHANNEL_DOWN:
             case KeyEvent.KEYCODE_PAGE_DOWN:
-                if (down) scrollScreen(1);
+                if (down) scrollFrac(0.8f);
                 return true;
 
             case KeyEvent.KEYCODE_DPAD_UP:
@@ -515,7 +511,6 @@ public class MainActivity extends Activity {
         protected void onDraw(Canvas canvas) {
             float c = getWidth() / 2f, r = c - 5f;
             if (free) {
-                // Cursor libre: círculo blanco grande
                 fill.setColor(Color.argb(210, 255, 255, 255));
                 ring.setColor(Color.parseColor("#3c1446"));
                 dot.setColor(Color.parseColor("#e13c78"));
@@ -523,7 +518,6 @@ public class MainActivity extends Activity {
                 canvas.drawCircle(c, c, r, ring);
                 canvas.drawCircle(c, c, r / 3f, dot);
             } else {
-                // Modo elementos: marcador rosa, más discreto
                 fill.setColor(Color.argb(230, 225, 60, 120));
                 ring.setColor(Color.WHITE);
                 canvas.drawCircle(c, c, r * 0.55f, fill);

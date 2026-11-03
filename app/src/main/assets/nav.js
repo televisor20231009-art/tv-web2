@@ -2,24 +2,67 @@
   if (window.__navInstalled) return;
   window.__navInstalled = true;
 
+  // Ancho de página en "px CSS". Más bajo = todo se ve más grande; más alto = más contenido.
+  var TV_WIDTH = 1280;
+
   var SEL = 'a[href],button,input:not([type=hidden]),select,textarea,summary,iframe,video,' +
             '[tabindex]:not([tabindex="-1"]),[onclick],[role=button],[role=link],[role=tab]';
   var cur = null;
 
+  // ---------- Estilos para TV + ocultar anuncios típicos ----------
   var st = document.createElement('style');
   st.textContent =
+    'html,body{overflow-x:hidden !important}' +
+    '::-webkit-scrollbar{display:none !important}' +
+    '*{-webkit-tap-highlight-color:transparent}' +
     '.__navf{outline:4px solid #e13c78 !important;outline-offset:3px !important;' +
     'box-shadow:0 0 0 8px rgba(225,60,120,.35) !important;border-radius:4px}' +
-    // ocultar anuncios típicos
     'ins.adsbygoogle,[id^="google_ads_"],iframe[src*="doubleclick"],iframe[src*="exoclick"],' +
     'iframe[src*="juicyads"],iframe[src*="trafficjunky"],iframe[src*="popads"]{display:none !important}';
   (document.head || document.documentElement).appendChild(st);
+
+  // ---------- Viewport fijo (evita que la página quede más ancha que la pantalla) ----------
+  function forceViewport() {
+    var want = 'width=' + TV_WIDTH;
+    var metas = document.querySelectorAll('meta[name=viewport]');
+    if (metas.length === 1 && metas[0].getAttribute('content') === want) return;
+    for (var i = 0; i < metas.length; i++) metas[i].parentNode.removeChild(metas[i]);
+    var m = document.createElement('meta');
+    m.name = 'viewport';
+    m.content = want;
+    (document.head || document.documentElement).appendChild(m);
+  }
+  forceViewport();
+  document.addEventListener('readystatechange', forceViewport);
+  window.addEventListener('load', forceViewport);
+  var vpTimer = setInterval(forceViewport, 700);
+  setTimeout(function () { clearInterval(vpTimer); }, 8000);
 
   function vvp() {
     return window.visualViewport ||
            { offsetLeft: 0, offsetTop: 0, width: innerWidth, height: innerHeight };
   }
 
+  // ---------- Scroll: usa el contenedor desplazable bajo el cursor, o la ventana ----------
+  // frac = fracción de la altura visible (positivo baja, negativo sube)
+  window.__scroll = function (frac, fx, fy) {
+    var vv = vvp(), dy = frac * vv.height;
+    var x = Math.min(Math.max(vv.offsetLeft + fx * vv.width, 1), innerWidth - 1);
+    var y = Math.min(Math.max(vv.offsetTop + fy * vv.height, 1), innerHeight - 1);
+    var el = document.elementFromPoint(x, y);
+    while (el && el !== document.body && el !== document.documentElement) {
+      var cs = getComputedStyle(el);
+      if ((cs.overflowY === 'auto' || cs.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 4) {
+        el.scrollBy({ top: dy, behavior: 'smooth' });
+        return 'el';
+      }
+      el = el.parentElement;
+    }
+    window.scrollBy({ top: dy, behavior: 'smooth' });
+    return 'win';
+  };
+
+  // ---------- Navegación por elementos ----------
   function visible(el) {
     if (!el.getClientRects().length) return false;
     var r = el.getBoundingClientRect();
@@ -117,13 +160,13 @@
     if (best) { setCur(best); return 'm,' + pos(best).s; }
 
     if (dir === 'down' || dir === 'up') {
-      window.scrollBy(0, (dir === 'down' ? 1 : -1) * innerHeight * 0.7);
+      window.__scroll(dir === 'down' ? 0.6 : -0.6, 0.5, 0.5);
       return 'scrolled';
     }
     return 'none';
   };
 
-  // Elimina capas invisibles a pantalla completa (secuestran el primer clic para abrir anuncios)
+  // ---------- Elimina capas invisibles a pantalla completa (secuestran el primer clic) ----------
   function killOverlays() {
     var els = document.querySelectorAll('body div, body a, body span, body section');
     for (var i = 0; i < els.length; i++) {
